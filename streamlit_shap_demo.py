@@ -3,85 +3,62 @@ import torch
 import pandas as pd
 import numpy as np
 import shap
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import seaborn as sns
 from modules.shap_tools import (
     create_kernel_explainer,
     explain_sample,
     simulate_scenario,
 )
 from modules.cf_generator import TorchWrapper, get_dice_engine, generate_counterfactuals
+from modules.model_training import (
+    train_model,
+    evaluate_model,
+    create_model_prediction_function,
+)
+from modules.data_processing import prepare_titanic_data
 
 st.title("Titanic SHAP Model Interpretation Toolbox")
 
-# --- Load & preprocess Titanic dataset ---
-df = (
-    sns.load_dataset("titanic")
-    .loc[:, ["survived", "pclass", "sex", "age", "sibsp", "parch", "fare", "embarked"]]
-    .dropna()
-)
-X_df = pd.get_dummies(
-    df.drop(columns="survived"), columns=["sex", "embarked"], drop_first=True
-)
-y = df["survived"].values
 
-# Map feature names to more descriptive labels
-feature_name_map = {
-    "pclass": "Passenger Class (1=1st, 2=2nd, 3=3rd)",
-    "age": "Age",
-    "sibsp": "Siblings/Spouses Aboard",
-    "parch": "Parents/Children Aboard",
-    "fare": "Fare (Ticket Price)",
-    "sex_male": "Is Male",
-    "embarked_Q": "Embarked at Queenstown",
-    "embarked_S": "Embarked at Southampton",
-}
-# Use original feature names for data processing
-orig_feature_names = X_df.columns.tolist()
-# Use descriptive names for display and SHAP explanations
-feature_names = [feature_name_map.get(f, f) for f in orig_feature_names]
-
-X_train_df, X_test_df, y_train_np, y_test_np = train_test_split(
-    X_df, y, test_size=0.2, random_state=42, stratify=y
-)
-scaler = StandardScaler()
-X_train_np = scaler.fit_transform(X_train_df.values)
-X_test_np = scaler.transform(X_test_df.values)
-
-X_train = torch.tensor(X_train_np, dtype=torch.float32)
-X_test = torch.tensor(X_test_np, dtype=torch.float32)
-y_train = torch.tensor(y_train_np, dtype=torch.long)
-y_test = torch.tensor(y_test_np, dtype=torch.long)
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# --- Define and train the model ---
-import torch.nn as nn
-import torch.optim as optim
+# --- Load & preprocess data using the new module ---
+@st.cache_data
+def get_processed_data():
+    """Cache the processed data to avoid reprocessing on every app reload."""
+    return prepare_titanic_data(test_size=0.2, random_state=42)
 
 
-class TitanicNet(nn.Module):
-    def __init__(self, input_dim):
-        super().__init__()
-        self.fc = nn.Linear(input_dim, 2)
+data = get_processed_data()
 
-    def forward(self, x):
-        return self.fc(x)
+# Extract commonly used variables from the data dictionary
+X_train_df = data["X_train_df"]
+X_test_df = data["X_test_df"]
+y_train_np = data["y_train_np"]
+y_test_np = data["y_test_np"]
+X_train = data["X_train"]
+X_test = data["X_test"]
+y_train = data["y_train"]
+y_test = data["y_test"]
+scaler = data["scaler"]
+device = data["device"]
+orig_feature_names = data["orig_feature_names"]
+feature_names = data["feature_names"]
+feature_name_map = data["feature_name_map"]
 
 
-model = TitanicNet(X_train.shape[1]).to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-loss_fn = nn.CrossEntropyLoss()
-n_epochs = 50
-for epoch in range(1, n_epochs + 1):
-    model.train()
-    optimizer.zero_grad()
-    logits = model(X_train.to(device))
-    loss = loss_fn(logits, y_train.to(device))
-    loss.backward()
-    optimizer.step()
-model.eval()
+# --- Train the model using the new module ---
+@st.cache_resource
+def get_trained_model():
+    """Cache the trained model to avoid retraining on every app reload."""
+    model = train_model(X_train, y_train, device, n_epochs=50, lr=1e-3)
+    return model
+
+
+model = get_trained_model()
+
+# --- Model Performance Evaluation ---
+if "model_metrics" not in st.session_state:
+    st.session_state.model_metrics = evaluate_model(
+        model, X_train, y_train_np, X_test, y_test_np, device
+    )
 
 # --- SHAP Explainer Setup ---
 if "explainer" not in st.session_state:
@@ -91,14 +68,61 @@ if "explainer" not in st.session_state:
 
 # --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
+
+# Model Performance Metrics
+with st.sidebar.expander("📊 Model Performance"):
+    metrics = st.session_state.model_metrics
+    st.metric("Train Accuracy", f"{metrics['train_accuracy']:.3f}")
+    st.metric("Test Accuracy", f"{metrics['test_accuracy']:.3f}")
+
+    # Classification metrics
+    report = metrics["classification_report"]
+    st.write("**Test Set Metrics:**")
+    st.write(f"Precision: {report['weighted avg']['precision']:.3f}")
+    st.write(f"Recall: {report['weighted avg']['recall']:.3f}")
+    st.write(f"F1-Score: {report['weighted avg']['f1-score']:.3f}")
+
+    # Confusion Matrix
+    cm = metrics["confusion_matrix"]
+    st.write("**Confusion Matrix:**")
+    st.write(f"True Negatives: {cm[0,0]}")
+    st.write(f"False Positives: {cm[0,1]}")
+    st.write(f"False Negatives: {cm[1,0]}")
+    st.write(f"True Positives: {cm[1,1]}")
+
+# Main Navigation
 tab = st.sidebar.radio(
     "Select a tool:",
     ["SHAP Sample Explainer", "What-If Scenario Simulator", "Counterfactual Generator"],
 )
 
 if tab == "SHAP Sample Explainer":
+    st.subheader("Quick Access: Sample Passengers")
+    # Get some interesting passenger indices with their basic info
+    sample_passengers = [
+        {"idx": 0, "desc": "Young male, 3rd class", "prediction": "Did not survive"},
+        {"idx": 15, "desc": "Adult female, 1st class", "prediction": "Survived"},
+        {"idx": 45, "desc": "Child, 3rd class", "prediction": "Survived"},
+        {"idx": 67, "desc": "Elderly male, 2nd class", "prediction": "Did not survive"},
+        {"idx": 102, "desc": "Young couple, 2nd class", "prediction": "Varied"},
+    ]
+
+    cols = st.columns(len(sample_passengers))
+    for i, passenger in enumerate(sample_passengers):
+        with cols[i]:
+            if st.button(
+                f"{passenger['desc']}\n(#{passenger['idx']})",
+                key=f"sample_{passenger['idx']}",
+            ):
+                # Set the passenger index in session state for all tabs to use
+                st.session_state.selected_passenger_idx = passenger["idx"]
+                st.rerun()
+
     st.subheader("Model Prediction Explanation for Individual Passengers")
-    idx = st.number_input("Passenger index", min_value=0, step=1)
+
+    # Use selected passenger from gallery if available
+    default_idx = st.session_state.get("selected_passenger_idx", 0)
+    idx = st.number_input("Passenger index", min_value=0, step=1, value=default_idx)
     max_display = st.slider(
         "Top features to display", min_value=1, max_value=8, value=8
     )
@@ -129,7 +153,10 @@ if tab == "SHAP Sample Explainer":
         st.write("Sample feature values:")
         raw_row_named = result["raw_row"]
         raw_row_named.index = feature_names
-        st.dataframe(raw_row_named.to_frame(name="value"), hide_index=True)
+        # Display as a dataframe with feature names as row labels
+        feature_df = raw_row_named.to_frame(name="Value")
+        feature_df.index.name = "Feature"
+        st.dataframe(feature_df)
         st.write("SHAP Waterfall Plot:")
         fig, ax = plt.subplots(figsize=(10, 6))
         shap.plots.waterfall(result["exp"], max_display=max_display, show=False)
@@ -141,14 +168,15 @@ if tab == "SHAP Sample Explainer":
         with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
             st.markdown(
                 """
-                - The plot explains the model's prediction for the selected passenger.
-                - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
-                - Each bar shows how a feature pushes the prediction higher or lower.
-                - Features in red push the prediction up, blue push it down.
-                - The rightmost value (**f(x)**) is the final model output for this passenger.
-                - The sum of all feature effects plus the base value equals the model's prediction.
-                - **The value next to each feature label is the standardized (scaled) value used by the model for that feature:** it shows how far above or below average this passenger's feature is, after preprocessing. This helps explain why the SHAP value is positive or negative.
-                - Use the sliders to adjust which features are shown.
+                **SHAP Waterfall Plot - Quick Guide:**
+                
+                - **Starting point, E[f(x)]**: Average prediction across all passengers
+                - **Red bars**: Features pushing prediction toward survival
+                - **Blue bars**: Features pushing prediction toward non-survival
+                - **Numbers on y-ticks**: Normalised feature values - mean of 0, sd of 1
+                - **Final point, f(x)**: Model's prediction for this passenger
+                
+                The plot shows how each feature contributes to the final prediction, from most to least influential.
                 """
             )
         # LLM explainer button
@@ -203,19 +231,13 @@ elif tab == "What-If Scenario Simulator":
     )
 
     if st.button("Simulate Scenario"):
+        # Get prediction function from the model module
+        predict_proba, predict_survival = create_model_prediction_function(
+            model, device
+        )
+
         result = simulate_scenario(
-            model_np=lambda x: (
-                torch.softmax(
-                    (
-                        lambda x_: model(
-                            torch.tensor(x_, dtype=torch.float32, device=device)
-                        ).detach()
-                    )(x),
-                    dim=1,
-                )
-                .cpu()
-                .numpy()
-            ),
+            model_np=predict_proba,  # This returns full probability matrix
             scaler=scaler,
             feature_names=orig_feature_names,  # Use original names for processing
             pclass=pclass,
@@ -236,7 +258,11 @@ elif tab == "What-If Scenario Simulator":
         raw_df_named.columns = [
             feature_name_map.get(c, c) for c in raw_df_named.columns
         ]
-        st.dataframe(raw_df_named.T, hide_index=True)
+        # Transpose to show features as rows and add proper labels
+        feature_display = raw_df_named.T
+        feature_display.columns = ["Value"]
+        feature_display.index.name = "Feature"
+        st.dataframe(feature_display)
         st.write("SHAP Waterfall Plot:")
         import matplotlib.pyplot as plt
         import io
@@ -253,20 +279,30 @@ elif tab == "What-If Scenario Simulator":
         with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
             st.markdown(
                 """
-                - The plot explains the model's prediction for your custom scenario.
-                - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
-                - Each bar shows how a feature pushes the prediction higher or lower.
-                - Features in red push the prediction up, blue push it down.
-                - The rightmost value (**f(x)**) is the final model output for this passenger.
-                - The sum of all feature effects plus the base value equals the model's prediction.
-                - **The value next to each feature label is the standardized (scaled) value used by the model for that feature:** it shows how far above or below average this passenger's feature is, after preprocessing. This helps explain why the SHAP value is positive or negative.
-                - Use the sliders to adjust which features are shown.
+                **SHAP Waterfall Plot - Quick Guide:**
+                
+                - **Starting point, E[f(x)]**: Average prediction across all passengers
+                - **Red bars**: Features pushing prediction toward survival
+                - **Blue bars**: Features pushing prediction toward non-survival
+                - **Numbers on y-ticks**: Normalised feature values - mean of 0, sd of 1
+                - **Final point, f(x)**: Model's prediction for this passenger
+                
+                The plot shows how each feature contributes to the final prediction, from most to least influential.
                 """
             )
 
 else:  # Counterfactual Generator
     st.subheader("Counterfactual Explanation Generator")
-    idx = st.number_input("Passenger index", min_value=0, step=1)
+
+    # Use selected passenger from gallery if available
+    default_idx = st.session_state.get("selected_passenger_idx", 0)
+    idx = st.number_input(
+        "Passenger index",
+        min_value=0,
+        step=1,
+        value=default_idx,
+        key="cf_passenger_idx",
+    )
     num_counterfactuals = st.slider(
         "Number of counterfactuals to generate", min_value=1, max_value=10, value=1
     )
@@ -341,7 +377,9 @@ else:  # Counterfactual Generator
         # Display sample features with descriptive names
         sample_features = X_test_df.iloc[idx : idx + 1].copy()
         sample_features.columns = feature_names
-        st.dataframe(sample_features, hide_index=True)
+        sample_features.index = [f"Passenger {idx}"]
+        sample_features.index.name = "Passenger"
+        st.dataframe(sample_features)
 
         st.write("Generated Counterfactuals:")
         # Display counterfactuals with descriptive names
