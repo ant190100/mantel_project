@@ -106,6 +106,7 @@ if tab == "SHAP Sample Explainer":
     import matplotlib.pyplot as plt
     import io
 
+    # Button to generate sample explanation and store in session state
     if st.button("Explain Sample"):
         result = explain_sample(
             st.session_state.explainer,
@@ -119,11 +120,16 @@ if tab == "SHAP Sample Explainer":
             nsamples=500,
             max_display=max_display,
         )
+        st.session_state.sample_explanation = result
+        st.session_state.llm_blurb = None  # Clear previous LLM output
+
+    # Only show explanation and LLM button if sample_explanation exists
+    if "sample_explanation" in st.session_state:
+        result = st.session_state.sample_explanation
         st.write("Sample feature values:")
-        # Map raw_row index to descriptive feature names
         raw_row_named = result["raw_row"]
         raw_row_named.index = feature_names
-        st.dataframe(raw_row_named.to_frame(name="value"))
+        st.dataframe(raw_row_named.to_frame(name="value"), hide_index=True)
         st.write("SHAP Waterfall Plot:")
         fig, ax = plt.subplots(figsize=(10, 6))
         shap.plots.waterfall(result["exp"], max_display=max_display, show=False)
@@ -132,22 +138,32 @@ if tab == "SHAP Sample Explainer":
         plt.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         st.image(buf)
-        st.markdown(
-            """
-        **How to read the SHAP Waterfall Plot:**
+        with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
+            st.markdown(
+                """
+                - The plot explains the model's prediction for the selected passenger.
+                - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
+                - Each bar shows how a feature pushes the prediction higher or lower.
+                - Features in red push the prediction up, blue push it down.
+                - The rightmost value (**f(x)**) is the final model output for this passenger.
+                - The sum of all feature effects plus the base value equals the model's prediction.
+                - **The value next to each feature label is the standardized (scaled) value used by the model for that feature:** it shows how far above or below average this passenger's feature is, after preprocessing. This helps explain why the SHAP value is positive or negative.
+                - Use the sliders to adjust which features are shown.
+                """
+            )
+        # LLM explainer button
+        if st.button("Explain with LLM"):
+            from modules.llm_explainer import explain_with_citations
 
-        - The plot explains the model's prediction for the selected passenger.
-        - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
-        - Each bar shows how a feature pushes the prediction higher or lower.
-        - Features in red push the prediction up, blue push it down.
-        - The rightmost value (**f(x)**) is the final model output for this passenger.
-        - The sum of all feature effects plus the base value equals the model's prediction.
-        - **The value next to each feature label is the standardized (scaled) value used by the model for that feature:**
-          it shows how far above or below average this passenger's feature is, after preprocessing. This helps explain why the SHAP value is positive or negative.
-
-        *Use the sliders to adjust which features are shown.*
-        """
-        )
+            st.session_state.llm_blurb = explain_with_citations(
+                shap_values=result["exp"].values,
+                x_row=result["exp"].data,
+                feature_names=result["exp"].feature_names,
+                target_name="prediction",
+                top_k=max_display,
+            )
+        if st.session_state.get("llm_blurb"):
+            st.markdown(f"**LLM Explanation:**\n\n{st.session_state.llm_blurb}")
 
 elif tab == "What-If Scenario Simulator":
     st.subheader("What-If Scenario Simulator")
@@ -220,7 +236,7 @@ elif tab == "What-If Scenario Simulator":
         raw_df_named.columns = [
             feature_name_map.get(c, c) for c in raw_df_named.columns
         ]
-        st.dataframe(raw_df_named.T)
+        st.dataframe(raw_df_named.T, hide_index=True)
         st.write("SHAP Waterfall Plot:")
         import matplotlib.pyplot as plt
         import io
@@ -234,70 +250,116 @@ elif tab == "What-If Scenario Simulator":
         plt.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         st.image(buf)
-        st.markdown(
-            """
-            **How to read the SHAP Waterfall Plot:**
-            - The plot explains the model's prediction for your custom scenario.
-            - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
-            - Each bar shows how a feature pushes the prediction higher or lower.
-            - Features in red push the prediction up, blue push it down.
-            - The rightmost value (**f(x)**) is the final model output for this scenario.
-            - The sum of all feature effects plus the base value equals the model's prediction.
-            - **The value next to each feature label is the standardized (scaled) value used by the model for that feature.**
-            """
-        )
-
-elif tab == "Counterfactual Generator":
-    st.subheader("Counterfactual Generator (DiCE)")
-    # Ensure all columns are int or float for DiCE
-    X_train_df_fixed = X_train_df.copy()
-    for col in X_train_df_fixed.columns:
-        # Convert all integer columns to int64, float columns to float64
-        if pd.api.types.is_integer_dtype(X_train_df_fixed[col]):
-            X_train_df_fixed[col] = X_train_df_fixed[col].astype(int)
-        elif pd.api.types.is_float_dtype(X_train_df_fixed[col]):
-            X_train_df_fixed[col] = X_train_df_fixed[col].astype(float)
-        else:
-            X_train_df_fixed[col] = (
-                pd.to_numeric(X_train_df_fixed[col], errors="coerce")
-                .fillna(0)
-                .astype(int)
+        with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
+            st.markdown(
+                """
+                - The plot explains the model's prediction for your custom scenario.
+                - The leftmost value (**E[f(x)]**) is the average model output (base value) for the background data.
+                - Each bar shows how a feature pushes the prediction higher or lower.
+                - Features in red push the prediction up, blue push it down.
+                - The rightmost value (**f(x)**) is the final model output for this passenger.
+                - The sum of all feature effects plus the base value equals the model's prediction.
+                - **The value next to each feature label is the standardized (scaled) value used by the model for that feature:** it shows how far above or below average this passenger's feature is, after preprocessing. This helps explain why the SHAP value is positive or negative.
+                - Use the sliders to adjust which features are shown.
+                """
             )
 
-    # Identify categorical and continuous features
-    categorical = []  # All columns are now numeric, so categorical is empty
-    continuous = [c for c in X_train_df_fixed.columns]
-
-    # Build DiCE engine (cache for performance)
-    if "dice_engine" not in st.session_state:
-        st.session_state.dice_engine = get_dice_engine(
-            TorchWrapper(model),
-            X_train_df_fixed,
-            continuous_features=continuous,
-            categorical_features=categorical,
-            outcome_name="y_dummy",
-        )
-    dice_engine = st.session_state.dice_engine
-    row_idx = st.number_input(
-        "Test row index", min_value=0, max_value=len(X_test_df) - 1, value=0, step=1
+else:  # Counterfactual Generator
+    st.subheader("Counterfactual Explanation Generator")
+    idx = st.number_input("Passenger index", min_value=0, step=1)
+    num_counterfactuals = st.slider(
+        "Number of counterfactuals to generate", min_value=1, max_value=10, value=1
     )
-    k = st.slider("Number of counterfactuals", min_value=1, max_value=5, value=1)
-    if st.button("Generate Counterfactuals"):
-        cf_table = generate_counterfactuals(
-            dice_engine, X_test_df, row_idx=row_idx, k=k
-        )
-        # Separate base/sample, counterfactual, and delta columns
-        base_cols = [
-            c
-            for c in cf_table.columns
-            if not c.endswith(" CF") and not c.endswith(" Δ")
-        ]
-        cf_cols = [c for c in cf_table.columns if c.endswith(" CF")]
-        delta_cols = [c for c in cf_table.columns if c.endswith(" Δ")]
 
-        st.write("Sample Feature Values:")
-        # Show only the first row for sample features
-        st.dataframe(cf_table[base_cols].iloc[[0]].style.format(precision=3))
-        st.write("Counterfactual Changes:")
-        cf_and_delta = pd.concat([cf_table[cf_cols], cf_table[delta_cols]], axis=1)
-        st.dataframe(cf_and_delta.style.format(precision=3))
+    # --- DICE Counterfactuals ---
+    st.write("### DICE Counterfactuals")
+    dice_button = st.button("Generate DICE Counterfactuals")
+    if dice_button:
+        with st.spinner("Generating counterfactuals..."):
+            # Ensure all columns are int or float for DiCE
+            X_train_df_fixed = X_train_df.copy()
+            for col in X_train_df_fixed.columns:
+                # Convert bool to int
+                if pd.api.types.is_bool_dtype(X_train_df_fixed[col]):
+                    X_train_df_fixed[col] = X_train_df_fixed[col].astype(int)
+                # Convert object to float (if possible)
+                elif pd.api.types.is_object_dtype(X_train_df_fixed[col]):
+                    try:
+                        X_train_df_fixed[col] = X_train_df_fixed[col].astype(float)
+                    except Exception:
+                        try:
+                            X_train_df_fixed[col] = X_train_df_fixed[col].astype(int)
+                        except Exception:
+                            # Try mapping True/False strings to 1/0
+                            if set(X_train_df_fixed[col].unique()) <= {"True", "False"}:
+                                X_train_df_fixed[col] = X_train_df_fixed[col].map(
+                                    {"True": 1, "False": 0}
+                                )
+                            else:
+                                raise ValueError(
+                                    f"Column {col} could not be converted to int or float for DiCE. Values: {X_train_df_fixed[col].unique()}"
+                                )
+                # Convert anything else that's not int/float
+                elif not (
+                    pd.api.types.is_integer_dtype(X_train_df_fixed[col])
+                    or pd.api.types.is_float_dtype(X_train_df_fixed[col])
+                ):
+                    try:
+                        X_train_df_fixed[col] = X_train_df_fixed[col].astype(int)
+                    except Exception:
+                        X_train_df_fixed[col] = X_train_df_fixed[col].astype(float)
+            # Final check: print dtypes and raise error if any column is not int/float
+            bad_cols = [
+                col
+                for col in X_train_df_fixed.columns
+                if not (
+                    pd.api.types.is_integer_dtype(X_train_df_fixed[col])
+                    or pd.api.types.is_float_dtype(X_train_df_fixed[col])
+                )
+            ]
+            if bad_cols:
+                print(
+                    "Bad columns and their values:",
+                    {col: X_train_df_fixed[col].unique() for col in bad_cols},
+                )
+                raise ValueError(
+                    f"These columns are not int or float and will cause DiCE to fail: {bad_cols}"
+                )
+            # Setup DiCE engine if not already present
+            if "dice_engine" not in st.session_state:
+                st.session_state.dice_engine = get_dice_engine(model, X_train_df_fixed)
+            dice_engine = st.session_state.dice_engine
+            # Use the correct test dataframe and index
+            result_df = generate_counterfactuals(
+                dice_engine,
+                X_test_df,
+                row_idx=idx,
+                k=num_counterfactuals,
+            )
+
+        st.write("Sample features:")
+        # Display sample features with descriptive names
+        sample_features = X_test_df.iloc[idx : idx + 1].copy()
+        sample_features.columns = feature_names
+        st.dataframe(sample_features, hide_index=True)
+
+        st.write("Generated Counterfactuals:")
+        # Display counterfactuals with descriptive names
+        if result_df is not None and not result_df.empty:
+            result_df_display = result_df.copy()
+            # Create column names for counterfactual and delta columns only (skip original)
+            if len(result_df_display.columns) == len(feature_names) * 3:
+                # Skip base columns, keep only CF columns + Delta columns
+                num_features = len(feature_names)
+                result_df_display = result_df_display.iloc[
+                    :, num_features:
+                ]  # Skip first third
+                new_columns = []
+                new_columns.extend(
+                    [f"{name} (Counterfactual)" for name in feature_names]
+                )
+                new_columns.extend([f"{name} (Change)" for name in feature_names])
+                result_df_display.columns = new_columns
+            st.dataframe(result_df_display, hide_index=True)
+        else:
+            st.write("No counterfactuals generated.")

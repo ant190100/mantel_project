@@ -1,27 +1,48 @@
-# SHAP tools for model interpretation
+"""
+SHAP Tools Module
+-----------------
+Provides helpers for creating SHAP explainers and generating explanations for model predictions.
+All functions are type-annotated and robust to input errors.
+"""
+
 import shap
 import numpy as np
 import torch
 import pandas as pd
 import random
+from typing import Any, Optional, List
 
 # Set a fixed random seed for reproducibility
-SEED = 42
+SEED: int = 42
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 random.seed(SEED)
 
-# Helper to create a SHAP KernelExplainer for a torch model
 
-
-def create_kernel_explainer(model, device, X_train, feature_names, bg_size=None):
-    # Use all rows if bg_size is None
+def create_kernel_explainer(
+    model: torch.nn.Module,
+    device: torch.device,
+    X_train: torch.Tensor,
+    feature_names: List[str],
+    bg_size: Optional[int] = None,
+) -> shap.KernelExplainer:
+    """
+    Create a SHAP KernelExplainer for a torch model.
+    Args:
+        model: Trained torch model.
+        device: Torch device.
+        X_train: Training data tensor.
+        feature_names: List of feature names.
+        bg_size: Number of background samples to use.
+    Returns:
+        SHAP KernelExplainer object.
+    """
     if bg_size is None:
         bg_np = X_train.cpu().numpy()
     else:
         bg_np = X_train[:bg_size].cpu().numpy()
 
-    def model_np(x_array):
+    def model_np(x_array: np.ndarray) -> np.ndarray:
         t = torch.tensor(x_array, dtype=torch.float32, device=device)
         with torch.no_grad():
             probs = torch.softmax(model(t), dim=1).cpu().numpy()
@@ -31,30 +52,39 @@ def create_kernel_explainer(model, device, X_train, feature_names, bg_size=None)
     return explainer
 
 
-# Helper to explain a sample and show SHAP waterfall plot
-
-
 def explain_sample(
-    explainer,
-    X_test,
-    X_test_df,
-    y_test,
-    model,
-    device,
-    feature_names,
-    idx,
-    nsamples=None,
-    max_display=10,
-):
+    explainer: shap.KernelExplainer,
+    X_test: torch.Tensor,
+    X_test_df: pd.DataFrame,
+    y_test: Any,
+    model: torch.nn.Module,
+    device: torch.device,
+    feature_names: List[str],
+    idx: int,
+    nsamples: Optional[int] = None,
+    max_display: int = 10,
+) -> dict:
+    """
+    Explain a sample and return SHAP values and model probabilities.
+    Args:
+        explainer: SHAP explainer object.
+        X_test: Test data tensor.
+        X_test_df: Test data DataFrame.
+        y_test: Test labels.
+        model: Trained torch model.
+        device: Torch device.
+        feature_names: List of feature names.
+        idx: Index of sample to explain.
+        nsamples: Number of samples for SHAP.
+        max_display: Max features to display.
+    Returns:
+        dict with raw_row, probs, exp (SHAP Explanation)
+    """
     raw_row = X_test_df.iloc[idx]
-    # scaled array for SHAP & model
     x_np = X_test[idx].cpu().numpy().reshape(1, -1)
-    # model probs
     with torch.no_grad():
         logits = model(torch.tensor(x_np, dtype=torch.float32, device=device))
         probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-    # SHAP values
-    # Use all samples if nsamples is None
     if nsamples is None:
         nsamples = X_test.shape[0]
     raw_sv = explainer.shap_values(x_np, nsamples=nsamples)
@@ -66,13 +96,23 @@ def explain_sample(
     return {"raw_row": raw_row, "probs": probs, "exp": exp}
 
 
-# Helper to create a SHAP explainer for pandas DataFrame input
-
-
-def create_df_explainer(model, X_train_df, sample_size=100):
+def create_df_explainer(
+    model: torch.nn.Module,
+    X_train_df: pd.DataFrame,
+    sample_size: int = 100,
+) -> shap.KernelExplainer:
+    """
+    Create a SHAP explainer for pandas DataFrame input.
+    Args:
+        model: Trained torch model.
+        X_train_df: Training data DataFrame.
+        sample_size: Number of background samples.
+    Returns:
+        SHAP KernelExplainer object.
+    """
     background = X_train_df.sample(sample_size, random_state=42)
 
-    def predict_df(data):
+    def predict_df(data: Any) -> np.ndarray:
         arr = np.asarray(data, dtype=np.float32)
         with torch.no_grad():
             x_t = torch.from_numpy(arr).to(next(model.parameters()).device)
@@ -83,10 +123,16 @@ def create_df_explainer(model, X_train_df, sample_size=100):
     return explainer
 
 
-# Helper to compute SHAP values for a single row
-
-
 def compute_shap_for_row(explainer, X_test_df, row):
+    """
+    Compute SHAP values for a single row.
+    Args:
+        explainer: SHAP explainer object.
+        X_test_df: Test data DataFrame.
+        row: Row index to compute SHAP values for.
+    Returns:
+        Array of SHAP values for the row.
+    """
     shap_1d = explainer(X_test_df.iloc[[row]]).values[0]
     shap_1d = shap_1d[: len(X_test_df.columns)]
     return shap_1d
