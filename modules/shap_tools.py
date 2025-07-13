@@ -9,6 +9,8 @@ import shap
 import numpy as np
 import torch
 import pandas as pd
+from typing import Any, Dict, List, Optional, Tuple
+import pandas as pd
 import random
 from typing import Any, Optional, List
 
@@ -63,6 +65,7 @@ def explain_sample(
     idx: int,
     nsamples: Optional[int] = None,
     max_display: int = 10,
+    feature_name_map: Optional[Dict[str, str]] = None,
 ) -> dict:
     """
     Explain a sample and return SHAP values and model probabilities.
@@ -77,6 +80,7 @@ def explain_sample(
         idx: Index of sample to explain.
         nsamples: Number of samples for SHAP.
         max_display: Max features to display.
+        feature_name_map: Optional mapping from technical feature names to human-readable names
     Returns:
         dict with raw_row, probs, exp (SHAP Explanation)
     """
@@ -90,8 +94,14 @@ def explain_sample(
     raw_sv = explainer.shap_values(x_np, nsamples=nsamples)
     sv = raw_sv[0]
     bv = explainer.expected_value
+    
+    # Use human-readable feature names if provided
+    display_names = feature_names
+    if feature_name_map is not None:
+        display_names = [feature_name_map.get(name, name) for name in feature_names]
+        
     exp = shap.Explanation(
-        values=sv, base_values=bv, data=x_np[0], feature_names=feature_names
+        values=sv, base_values=bv, data=x_np[0], feature_names=display_names
     )
     return {"raw_row": raw_row, "probs": probs, "exp": exp}
 
@@ -152,10 +162,14 @@ def simulate_scenario(
     nsamples=None,
     max_display=10,
     explainer=None,
+    feature_name_map=None,
 ):
     """
     Simulate a custom scenario for the Titanic model and show SHAP explanation.
     Returns a dict with raw input, probabilities, and SHAP explanation.
+    
+    Args:
+        feature_name_map: Optional mapping from technical feature names to human-readable names
     """
     import pandas as pd
 
@@ -199,7 +213,12 @@ def simulate_scenario(
         )
         import shap
 
+        # Use human-readable feature names if provided
+        display_names = feature_names
+        if feature_name_map is not None:
+            display_names = [feature_name_map.get(name, name) for name in feature_names]
+            
         exp = shap.Explanation(
-            values=sv, base_values=bv, data=X_scaled[0], feature_names=feature_names
+            values=sv, base_values=bv, data=X_scaled[0], feature_names=display_names
         )
     return {"raw_df": raw_df, "probs": probs, "shap_explanation": exp}

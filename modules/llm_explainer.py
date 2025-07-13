@@ -20,7 +20,7 @@ def explain_with_citations(
     target_name: str = "prediction",
     top_k: int = 5,
     temperature: float = 0.4,
-    max_new_tokens: int = 500,
+    max_new_tokens: int = 400,
 ) -> str:
     """
     Generate a plain-English explanation of SHAP values for a sample, with inline [n] citations.
@@ -61,7 +61,7 @@ def explain_with_citations(
             "role": "user",
             "content": textwrap.dedent(
                 f"""\
-                Your response must be no more than 2 sentences and under {max_new_tokens - 100} tokens.
+                Your response must be no more than 2 sentences and under {max_new_tokens - 150} tokens.
                 Below are the most influential features for one sample and their SHAP contributions.
                 • Write concise plain-English sentences that explain **why** the model arrived at the current {target_name}.
                 • Whenever you reference a feature, copy its bold name and append the citation key (e.g. **Age** [1]).

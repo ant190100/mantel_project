@@ -16,10 +16,10 @@ from modules.model_training import (
 )
 from modules.data_processing import prepare_titanic_data
 
-st.title("Titanic SHAP Model Interpretation Toolbox")
+st.title("Titanic Survival Prediction - ML Interpretation Toolbox")
 
 
-# --- Load & preprocess data using the new module ---
+# Load and preprocess data
 @st.cache_data
 def get_processed_data():
     """Cache the processed data to avoid reprocessing on every app reload."""
@@ -44,7 +44,7 @@ feature_names = data["feature_names"]
 feature_name_map = data["feature_name_map"]
 
 
-# --- Train the model using the new module ---
+# Train the model
 @st.cache_resource
 def get_trained_model():
     """Cache the trained model to avoid retraining on every app reload."""
@@ -54,23 +54,34 @@ def get_trained_model():
 
 model = get_trained_model()
 
-# --- Model Performance Evaluation ---
+# Calculate model performance metrics
 if "model_metrics" not in st.session_state:
     st.session_state.model_metrics = evaluate_model(
         model, X_train, y_train_np, X_test, y_test_np, device
     )
 
-# --- SHAP Explainer Setup ---
+# Initialize SHAP explainer
 if "explainer" not in st.session_state:
     st.session_state.explainer = create_kernel_explainer(
         model, device, X_train, feature_names
     )
 
-# --- Sidebar Navigation ---
+# Sidebar Navigation
 st.sidebar.title("Navigation")
 
+# Model Information in sidebar
+with st.sidebar.expander("Model Information"):
+    st.markdown(
+        """
+    - **Architecture**: Single Linear Layer Neural Network
+    - **Input Features**: 8 (passenger attributes)
+    - **Output**: Binary Survival Prediction (0=Died, 1=Survived)
+    - **Training Data**: 712 Titanic passengers
+    """
+    )
+
 # Model Performance Metrics
-with st.sidebar.expander("📊 Model Performance"):
+with st.sidebar.expander("Model Performance"):
     metrics = st.session_state.model_metrics
     st.metric("Train Accuracy", f"{metrics['train_accuracy']:.3f}")
     st.metric("Test Accuracy", f"{metrics['test_accuracy']:.3f}")
@@ -98,7 +109,7 @@ tab = st.sidebar.radio(
 
 if tab == "SHAP Sample Explainer":
     st.subheader("Quick Access: Sample Passengers")
-    # Get some interesting passenger indices with their basic info
+    # Pre-selected passengers with different characteristics
     sample_passengers = [
         {"idx": 0, "desc": "Young male, 3rd class", "prediction": "Did not survive"},
         {"idx": 15, "desc": "Adult female, 1st class", "prediction": "Survived"},
@@ -143,6 +154,7 @@ if tab == "SHAP Sample Explainer":
             idx,
             nsamples=500,
             max_display=max_display,
+            feature_name_map=feature_name_map,
         )
         st.session_state.sample_explanation = result
         st.session_state.llm_blurb = None  # Clear previous LLM output
@@ -150,6 +162,17 @@ if tab == "SHAP Sample Explainer":
     # Only show explanation and LLM button if sample_explanation exists
     if "sample_explanation" in st.session_state:
         result = st.session_state.sample_explanation
+
+        # Display prediction result prominently
+        survived_prob = float(result["probs"][1])
+        st.markdown(
+            f"""
+        ### Prediction:
+        * Survival Probability: **{survived_prob:.2%}**
+        * Death Probability: **{1-survived_prob:.2%}**
+        """
+        )
+
         st.write("Sample feature values:")
         raw_row_named = result["raw_row"]
         raw_row_named.index = feature_names
@@ -165,16 +188,17 @@ if tab == "SHAP Sample Explainer":
         plt.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         st.image(buf)
-        with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
+        with st.expander("How to read the SHAP Waterfall Plot"):
             st.markdown(
                 """
                 **SHAP Waterfall Plot - Quick Guide:**
                 
                 - **Starting point, E[f(x)]**: Average prediction across all passengers
+                - **Final point, f(x)**: Model's prediction for this passenger
                 - **Red bars**: Features pushing prediction toward survival
                 - **Blue bars**: Features pushing prediction toward non-survival
-                - **Numbers on y-ticks**: Normalised feature values - mean of 0, sd of 1
-                - **Final point, f(x)**: Model's prediction for this passenger
+                - **Numbers on y-axis**: Standard normal values (mean = 0, sd = 1)
+                
                 
                 The plot shows how each feature contributes to the final prediction, from most to least influential.
                 """
@@ -183,6 +207,9 @@ if tab == "SHAP Sample Explainer":
         if st.button("Explain with LLM"):
             from modules.llm_explainer import explain_with_citations
 
+            st.write(
+                "Generating natural language explanation of the model's prediction..."
+            )
             st.session_state.llm_blurb = explain_with_citations(
                 shap_values=result["exp"].values,
                 x_row=result["exp"].data,
@@ -195,6 +222,11 @@ if tab == "SHAP Sample Explainer":
 
 elif tab == "What-If Scenario Simulator":
     st.subheader("What-If Scenario Simulator")
+    # Description of this tool
+    st.write(
+        "Adjust passenger characteristics below to see how they would affect survival prediction."
+    )
+
     pclass = st.selectbox(
         "Passenger Class (1=1st, 2=2nd, 3=3rd)", [1, 2, 3], index=2, key="pclass_whatif"
     )
@@ -250,8 +282,19 @@ elif tab == "What-If Scenario Simulator":
             nsamples=500,
             max_display=max_display,
             explainer=st.session_state.explainer,
-            # Pass descriptive names for SHAP plot via explainer
+            feature_name_map=feature_name_map,
         )
+
+        # Display prediction result prominently
+        prob_survived = float(result["probs"][1])
+        st.markdown(
+            f"""
+        ### Prediction for This Scenario:
+        * Survival Probability: **{prob_survived:.2%}**
+        * Death Probability: **{(1-prob_survived):.2%}**
+        """
+        )
+
         st.write("Raw input:")
         # Display raw input with descriptive names
         raw_df_named = result["raw_df"].copy()
@@ -276,16 +319,17 @@ elif tab == "What-If Scenario Simulator":
         plt.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         st.image(buf)
-        with st.expander("ℹ️ How to read the SHAP Waterfall Plot"):
+        with st.expander("How to read the SHAP Waterfall Plot"):
             st.markdown(
                 """
                 **SHAP Waterfall Plot - Quick Guide:**
                 
                 - **Starting point, E[f(x)]**: Average prediction across all passengers
+                - **Final point, f(x)**: Model's prediction for this passenger
                 - **Red bars**: Features pushing prediction toward survival
                 - **Blue bars**: Features pushing prediction toward non-survival
-                - **Numbers on y-ticks**: Normalised feature values - mean of 0, sd of 1
-                - **Final point, f(x)**: Model's prediction for this passenger
+                - **Numbers on y-axis**: Standard normal values (mean = 0, sd = 1)
+                
                 
                 The plot shows how each feature contributes to the final prediction, from most to least influential.
                 """
@@ -293,6 +337,9 @@ elif tab == "What-If Scenario Simulator":
 
 else:  # Counterfactual Generator
     st.subheader("Counterfactual Explanation Generator")
+    st.write(
+        "Generate 'what-if' scenarios that would change the model's prediction for a passenger."
+    )
 
     # Use selected passenger from gallery if available
     default_idx = st.session_state.get("selected_passenger_idx", 0)
@@ -307,8 +354,11 @@ else:  # Counterfactual Generator
         "Number of counterfactuals to generate", min_value=1, max_value=10, value=1
     )
 
-    # --- DICE Counterfactuals ---
+    # DICE Counterfactuals
     st.write("### DICE Counterfactuals")
+    st.write(
+        "DiCE (Diverse Counterfactual Explanations) generates alternative passenger profiles that would result in a different prediction."
+    )
     dice_button = st.button("Generate DICE Counterfactuals")
     if dice_button:
         with st.spinner("Generating counterfactuals..."):
